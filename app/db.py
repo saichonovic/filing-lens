@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from models.base import Base
 
 
 engine = create_engine(settings.database_url, future=True)
@@ -23,3 +24,7 @@ def get_session() -> Session:
         raise
     finally:
         session.close()
+
+
+def create_all_tables() -> None:
+    Base.metadata.create_all(bind=engine)
