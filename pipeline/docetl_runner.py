@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import uuid
+from io import StringIO
 from pathlib import Path
 
 import yaml
+from rich.console import Console
 
 from app.docetl_runtime import (
     ensure_docetl_home,
@@ -49,7 +53,8 @@ def run_yaml_pipeline(
     if not yaml_path.exists():
         raise FileNotFoundError(f"Pipeline YAML not found: {yaml_path}")
 
-    work_dir = Path("storage/docetl_runs") / pipeline_name
+    run_token = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    work_dir = Path("storage/docetl_runs") / pipeline_name / run_token
     work_dir.mkdir(parents=True, exist_ok=True)
 
     in_path = Path(input_path) if input_path is not None else work_dir / "input.json"
@@ -66,7 +71,8 @@ def run_yaml_pipeline(
     config["pipeline"]["output"]["path"] = str(out_path.resolve())
     config["pipeline"]["output"]["intermediate_dir"] = str(intermediate_dir.resolve())
 
-    runner = DSLRunner(config)
+    console = Console(file=StringIO(), force_terminal=False, color_system=None)
+    runner = DSLRunner(config, console=console)
     runner.load_run_save()
 
     if not out_path.exists():
