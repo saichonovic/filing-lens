@@ -5,10 +5,13 @@ __pycache__/
 .mypy_cache/
 .env
 alembic.ini
+.docetl_home/
 storage/raw/*
 storage/extracted/*
 storage/processed/*
 storage/exports/*
+storage/docetl_runs/*
+storage/xbrl/*
 !storage/raw/.gitkeep
 !storage/extracted/.gitkeep
 !storage/processed/.gitkeep
