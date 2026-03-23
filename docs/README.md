@@ -12,5 +12,6 @@ Keep those root documents as the implementation contract unless intentionally su
 
 Optional Stage 5 LLM enrichment:
 
-- `scripts/derive.py --with-llm` expects `ANTHROPIC_API_KEY`
-- install `anthropic` into `.venv` only when enabling the narrative layer
+- the intended LLM path is the existing BungeLens DocETL bootstrap using GPT-5.4
+- the current deterministic pipeline does not require any LLM dependency
+- wire DocETL/GPT-5.4 before enabling narrative enrichment in production

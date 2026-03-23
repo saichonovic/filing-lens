@@ -4,6 +4,9 @@ from sqlalchemy import select
 
 from models.tables import DetectedSignal, FilingSection, PolicyDisclosure
 
+# FilingLens should use the existing BungeLens DocETL bootstrap with GPT-5.4
+# when the optional narrative layer is activated.
+
 
 DOCETL_GATE = {
     "accrual_divergence": "MEDIUM",
@@ -39,7 +42,7 @@ def run_policy_change_narrative(filing_id: str, prior_filing_id: str, policy_typ
     )
     prior_text = prior_policy.policy_text if prior_policy else "[No equivalent policy in prior filing]"
     prompt = f"""You are analyzing SEC filing policy language changes.\n\nCURRENT FILING POLICY ({policy_type}):\n{(current_policy.policy_text or '')[:1000]}\n\nPRIOR FILING POLICY:\n{prior_text[:1000]}\n\nIn 2-3 sentences explain:\n1. What specifically changed\n2. Whether the change increases investor risk (and why)\n3. One specific question investors should ask management\n\nBe concrete. Reference actual language differences."""
-    response = llm_client.messages.create(model="claude-sonnet-4-5", max_tokens=300, messages=[{"role": "user", "content": prompt}])
+    response = llm_client.messages.create(model="gpt-5.4", max_tokens=300, messages=[{"role": "user", "content": prompt}])
     narrative = response.content[0].text
     current_policy.change_summary = narrative
     session.flush()
@@ -67,7 +70,7 @@ def run_signal_narrative(signal: DetectedSignal, filing_id: str, prior_filing_id
             section_text = (section.section_text or "")[:2000]
 
     prompt = f"""You are an SEC filing analyst reviewing a risk signal.\n\nSIGNAL TYPE: {signal.signal_type}\nSEVERITY: {signal.severity}\nDETERMINISTIC FINDINGS: {signal.summary}\n\nRELEVANT FILING TEXT:\n{section_text}\n\nIn 3-4 sentences:\n1. Confirm or qualify the deterministic finding with specific language from the filing\n2. Explain what this means for a retail investor in plain English\n3. State what to watch for in the next quarterly filing\n\nDo not invent numbers. Only reference what the filing actually says."""
-    response = llm_client.messages.create(model="claude-sonnet-4-5", max_tokens=400, messages=[{"role": "user", "content": prompt}])
+    response = llm_client.messages.create(model="gpt-5.4", max_tokens=400, messages=[{"role": "user", "content": prompt}])
     enriched_summary = (signal.summary or "") + "\n\nANALYST NOTE: " + response.content[0].text
     signal.summary = enriched_summary
     signal.detection_method = "llm_supported"

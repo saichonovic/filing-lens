@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pipeline.derive import run_derive, run_derive_by_ticker
 
@@ -16,8 +15,10 @@ def main() -> None:
     signal_filter = args.signals.split(",") if args.signals else None
     llm_client = None
     if args.with_llm:
-        import anthropic
-        llm_client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        raise SystemExit(
+            "--with-llm is reserved for the BungeLens DocETL GPT-5.4 bootstrap. "
+            "That integration is not wired in this repo yet."
+        )
     if args.ticker:
         print(run_derive_by_ticker(args.ticker, signal_filter=signal_filter, llm_client=llm_client))
         return
