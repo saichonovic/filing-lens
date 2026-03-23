@@ -131,6 +131,15 @@ class PolicyDisclosure(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
 
 
+class FilingComparison(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "filing_comparisons"
+
+    current_filing_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("filings.id"), nullable=False)
+    comparison_filing_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("filings.id"), nullable=False)
+    comparison_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
 class ReviewQueue(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "review_queue"
 
