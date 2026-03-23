@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.env
+alembic.ini
+storage/raw/*
+storage/extracted/*
+storage/processed/*
+storage/exports/*
+!storage/raw/.gitkeep
+!storage/extracted/.gitkeep
+!storage/processed/.gitkeep
+!storage/exports/.gitkeep
