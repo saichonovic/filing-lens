@@ -6,21 +6,21 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
 from extractors.section_parser import parse_sections
-from models.tables import Filing, FilingDocument, FilingSection, ReviewQueue
+from models.tables import Filing, FilingComparison, FilingDocument, FilingPeriod, FilingSection, FinancialFact, PolicyDisclosure, ReviewQueue, SignalEvidence, DetectedSignal
 from pipeline.common import stage_run
 
 
 STORAGE_RAW = Path("storage/raw")
 
 
-def run_extract(filing_id: str) -> dict[str, Any]:
+def run_extract(filing_id: str, force: bool = False) -> dict[str, Any]:
     """Download HTML and parse canonical filing sections. Deterministic only."""
-    with stage_run("extract", "filing", filing_id) as (session, run):
-        result = _run_extract_in_existing_session(session, filing_id, run.id)
+    with stage_run("extract", "filing", filing_id, config_snapshot={"force": force}) as (session, run):
+        result = _run_extract_in_existing_session(session, filing_id, run.id, force=force)
         run.records_written = result["downloaded"] + result["sections_committed"] + result["sections_queued"]
         return {
             "run_id": str(run.id),
@@ -30,19 +30,20 @@ def run_extract(filing_id: str) -> dict[str, Any]:
         }
 
 
-def run_extract_all_pending() -> list[dict[str, Any]]:
-    with stage_run("extract", "batch", "all_pending") as (session, run):
-        filing_ids = session.scalars(
-            select(Filing.id)
-            .join(FilingDocument, FilingDocument.filing_id == Filing.id)
-            .where(FilingDocument.extraction_status.in_(["pending", "downloaded"]))
-            .distinct()
-        ).all()
+def run_extract_all_pending(force: bool = False) -> list[dict[str, Any]]:
+    scope_name = "all_force" if force else "all_pending"
+    with stage_run("extract", "batch", scope_name, config_snapshot={"force": force}) as (session, run):
+        query = select(Filing.id).join(FilingDocument, FilingDocument.filing_id == Filing.id)
+        if force:
+            query = query.where(FilingDocument.document_role == "primary")
+        else:
+            query = query.where(FilingDocument.extraction_status.in_(["pending", "downloaded"]))
+        filing_ids = session.scalars(query.distinct()).all()
 
         results: list[dict[str, Any]] = []
         total_records = 0
         for filing_id in filing_ids:
-            result = _run_extract_in_existing_session(session, str(filing_id), run.id)
+            result = _run_extract_in_existing_session(session, str(filing_id), run.id, force=force)
             total_records += result["downloaded"] + result["sections_committed"] + result["sections_queued"]
             results.append(result)
 
@@ -50,10 +51,13 @@ def run_extract_all_pending() -> list[dict[str, Any]]:
         return results
 
 
-def _run_extract_in_existing_session(session, filing_id: str, run_id) -> dict[str, Any]:
+def _run_extract_in_existing_session(session, filing_id: str, run_id, force: bool = False) -> dict[str, Any]:
     filing = session.scalar(select(Filing).where(Filing.id == filing_id))
     if filing is None:
         raise ValueError(f"Filing {filing_id} was not found.")
+
+    if force:
+        _clear_existing_extract_outputs(session, filing.id)
 
     documents = session.scalars(
         select(FilingDocument).where(
@@ -170,6 +174,28 @@ def commit_sections_with_review(session, sections: list[dict], run_id) -> tuple[
 
     session.flush()
     return committed, queued
+
+
+def _clear_existing_extract_outputs(session, filing_id) -> None:
+    signal_ids = session.scalars(select(DetectedSignal.id).where(DetectedSignal.filing_id == filing_id)).all()
+    if signal_ids:
+        session.execute(delete(SignalEvidence).where(SignalEvidence.signal_id.in_(signal_ids)))
+    session.execute(delete(DetectedSignal).where(DetectedSignal.filing_id == filing_id))
+    session.execute(
+        delete(FilingComparison).where(
+            FilingComparison.current_filing_id == filing_id
+        )
+    )
+    session.execute(delete(FinancialFact).where(FinancialFact.filing_id == filing_id))
+    session.execute(delete(PolicyDisclosure).where(PolicyDisclosure.filing_id == filing_id))
+    session.execute(delete(FilingPeriod).where(FilingPeriod.filing_id == filing_id))
+    session.execute(
+        delete(ReviewQueue).where(
+            ReviewQueue.object_type == "filing_section",
+            ReviewQueue.details_json["filing_id"].astext == str(filing_id),
+        )
+    )
+    session.execute(delete(FilingSection).where(FilingSection.filing_id == filing_id))
 
 
 def _normalize_archive_url(source_url: str | None) -> str:

@@ -6,15 +6,17 @@ from typing import Any
 from sqlalchemy import delete, select
 
 from extractors.derived_ratios import compute_derived_ratios
-from extractors.financial_facts import ALL_RULES, extract_facts_from_section
+from extractors.financial_facts import ALL_RULES, DEBT_FOOTNOTE_RULES, extract_facts_from_section
+from extractors.ixbrl_parser import extract_ixbrl_facts
 from extractors.period_normalizer import normalize_periods
 from extractors.policy_disclosures import extract_policy_disclosures
-from models.tables import Filing, FilingPeriod, FilingSection, FinancialFact, PolicyDisclosure, ReviewQueue
+from extractors.xbrl_facts import extract_facts_from_companyfacts, fetch_companyfacts
+from models.tables import DetectedSignal, Filing, FilingComparison, FilingDocument, FilingPeriod, FilingSection, FinancialFact, Issuer, PolicyDisclosure, ReviewQueue, SignalEvidence
 from pipeline.common import stage_run
 
 
-def run_normalize(filing_id: str) -> dict[str, Any]:
-    with stage_run("normalize", "filing", filing_id) as (session, run):
+def run_normalize(filing_id: str, force: bool = False) -> dict[str, Any]:
+    with stage_run("normalize", "filing", filing_id, config_snapshot={"force": force}) as (session, run):
         counts = _run_normalize_in_existing_session(session, filing_id, run.id)
         run.records_written = sum(counts.values())
         return {
@@ -25,10 +27,10 @@ def run_normalize(filing_id: str) -> dict[str, Any]:
         }
 
 
-def run_normalize_all_extracted() -> list[dict[str, Any]]:
-    with stage_run("normalize", "batch", "all_extracted") as (session, run):
+def run_normalize_all_extracted(force: bool = False) -> list[dict[str, Any]]:
+    with stage_run("normalize", "batch", "all_extracted", config_snapshot={"force": force}) as (session, run):
         filing_ids = session.scalars(
-            select(Filing.id).where(Filing.ingestion_status == "extracted").order_by(Filing.filing_date.desc())
+            select(Filing.id).where(Filing.ingestion_status.in_(["extracted", "normalized", "resolved", "derived"])).order_by(Filing.filing_date.desc())
         ).all()
         results: list[dict[str, Any]] = []
         total_records = 0
@@ -59,16 +61,17 @@ def _run_normalize_in_existing_session(session, filing_id: str, run_id) -> dict[
     sections = _select_primary_sections(session, filing_id)
     pending_review_items = []
 
-    for section in sections:
-        if section.section_code in ALL_RULES and period_id is not None:
-            facts, review_items = extract_facts_from_section(section, period_id, session)
-            for fact in facts:
-                if _fact_exists(session, filing_id, period_id, fact.fact_name, fact.source_method):
-                    continue
-                session.add(fact)
-                counts["facts"] += 1
-            pending_review_items.extend(review_items)
+    if period_id is not None and periods:
+        facts, review_items = _extract_facts_for_filing(session, filing, periods[0], sections)
+        for fact in facts:
+            if _fact_exists_any_source(session, filing_id, period_id, fact.fact_name):
+                continue
+            session.add(fact)
+            counts["facts"] += 1
+        session.flush()
+        pending_review_items.extend(review_items)
 
+    for section in sections:
         for policy in extract_policy_disclosures(section, session):
             if _policy_exists(session, filing_id, policy.policy_type, policy.policy_text):
                 continue
@@ -121,7 +124,72 @@ def _select_primary_sections(session, filing_id: str) -> list[FilingSection]:
     return sorted(selected, key=lambda section: (priority.get(section.section_code or "", 99), section.section_order or 9999))
 
 
+def _extract_facts_for_filing(session, filing: Filing, period: FilingPeriod, sections: list[FilingSection]) -> tuple[list[FinancialFact], list[ReviewQueue]]:
+    all_facts: list[FinancialFact] = []
+    all_reviews: list[ReviewQueue] = []
+    committed: set[str] = set()
+
+    issuer = session.scalar(select(Issuer).where(Issuer.id == filing.issuer_id))
+    if issuer and issuer.cik:
+        companyfacts = fetch_companyfacts(issuer.cik)
+        if companyfacts:
+            xbrl_facts, xbrl_reviews = extract_facts_from_companyfacts(
+                companyfacts=companyfacts,
+                filing_accession=filing.accession_number,
+                period_end_date=filing.period_end_date,
+                filing_id=filing.id,
+                period_id=period.id,
+                form_type=filing.form_type,
+            )
+            all_facts.extend(xbrl_facts)
+            all_reviews.extend(xbrl_reviews)
+            committed.update(fact.fact_name for fact in xbrl_facts)
+
+    primary_doc = session.scalar(
+        select(FilingDocument).where(
+            FilingDocument.filing_id == filing.id,
+            FilingDocument.document_role == "primary",
+        )
+    )
+    if primary_doc and primary_doc.file_path:
+        ixbrl_facts = extract_ixbrl_facts(
+            html_path=primary_doc.file_path,
+            filing_id=filing.id,
+            period_id=period.id,
+            committed_names=committed,
+        )
+        all_facts.extend(ixbrl_facts)
+        committed.update(fact.fact_name for fact in ixbrl_facts)
+
+    for section in sections:
+        if section.section_code != "FOOTNOTE_DEBT":
+            continue
+        debt_facts, debt_reviews = extract_facts_from_section(
+            section=section,
+            period_id=period.id,
+            session=session,
+            rules_override=DEBT_FOOTNOTE_RULES,
+        )
+        for fact in debt_facts:
+            if fact.fact_name in committed:
+                continue
+            all_facts.append(fact)
+            committed.add(fact.fact_name)
+        all_reviews.extend(debt_reviews)
+
+    return all_facts, all_reviews
+
+
 def _clear_existing_normalize_outputs(session, filing_id: str) -> None:
+    signal_ids = session.scalars(select(DetectedSignal.id).where(DetectedSignal.filing_id == filing_id)).all()
+    if signal_ids:
+        session.execute(delete(SignalEvidence).where(SignalEvidence.signal_id.in_(signal_ids)))
+    session.execute(delete(DetectedSignal).where(DetectedSignal.filing_id == filing_id))
+    session.execute(
+        delete(FilingComparison).where(
+            FilingComparison.current_filing_id == filing_id
+        )
+    )
     session.execute(
         delete(ReviewQueue).where(
             ReviewQueue.object_type == "financial_fact",
@@ -140,6 +208,16 @@ def _fact_exists(session, filing_id, period_id, fact_name: str, source_method: s
             FinancialFact.period_id == period_id,
             FinancialFact.fact_name == fact_name,
             FinancialFact.source_method == source_method,
+        )
+    ) is not None
+
+
+def _fact_exists_any_source(session, filing_id, period_id, fact_name: str) -> bool:
+    return session.scalar(
+        select(FinancialFact.id).where(
+            FinancialFact.filing_id == filing_id,
+            FinancialFact.period_id == period_id,
+            FinancialFact.fact_name == fact_name,
         )
     ) is not None
 

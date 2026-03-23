@@ -11,6 +11,7 @@ from signals.accrual_quality import run_accrual_signal
 from signals.auditor_and_management_events import run_event_signals
 from signals.channel_stuffing import run_channel_stuffing_signal
 from signals.covenant_stress import run_covenant_stress_signal
+from signals.going_concern import run_going_concern_signal
 
 
 def run_derive(issuer_id: str, signal_filter: list[str] | None = None, llm_client=None) -> dict[str, Any]:
@@ -70,6 +71,11 @@ def _run_derive_in_existing_session(session, issuer_id: str, llm_client=None, si
 
         if active_filter is None or "covenant_stress" in active_filter:
             signal = run_covenant_stress_signal(fid, issuer_id, session)
+            if signal:
+                active_signals.append(signal)
+
+        if active_filter is None or "going_concern_pre_signal" in active_filter:
+            signal = run_going_concern_signal(fid, issuer_id, session)
             if signal:
                 active_signals.append(signal)
 

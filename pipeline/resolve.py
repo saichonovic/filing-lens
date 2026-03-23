@@ -12,8 +12,8 @@ from resolvers.prior_filing_match import apply_prior_filing_resolution
 from resolvers.section_aligner import align_sections
 
 
-def run_resolve(issuer_id: str) -> dict[str, Any]:
-    with stage_run("resolve", "issuer", issuer_id) as (session, run):
+def run_resolve(issuer_id: str, force: bool = False) -> dict[str, Any]:
+    with stage_run("resolve", "issuer", issuer_id, config_snapshot={"force": force}) as (session, run):
         counts = _run_resolve_in_existing_session(session, issuer_id, str(run.id))
         run.records_written = sum(counts.values())
         return {
@@ -24,8 +24,8 @@ def run_resolve(issuer_id: str) -> dict[str, Any]:
         }
 
 
-def run_resolve_by_ticker(ticker: str) -> dict[str, Any]:
-    with stage_run("resolve", "ticker", ticker) as (session, run):
+def run_resolve_by_ticker(ticker: str, force: bool = False) -> dict[str, Any]:
+    with stage_run("resolve", "ticker", ticker, config_snapshot={"force": force}) as (session, run):
         issuer = session.scalar(select(Issuer).where(Issuer.ticker == ticker))
         if issuer is None:
             raise ValueError(f"Issuer with ticker {ticker} not found.")
@@ -78,4 +78,10 @@ def _clear_existing_resolve_outputs(session, issuer_id: str) -> None:
     filing_ids = session.scalars(select(Filing.id).where(Filing.issuer_id == issuer_id)).all()
     session.execute(
         delete(FilingComparison).where(FilingComparison.current_filing_id.in_(filing_ids))
+    )
+    session.execute(
+        delete(ReviewQueue).where(
+            ReviewQueue.object_type.in_(["filing_period", "filing_section"]),
+            ReviewQueue.details_json["current_filing_id"].astext.in_([str(filing_id) for filing_id in filing_ids]),
+        )
     )

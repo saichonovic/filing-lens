@@ -15,7 +15,7 @@ def compute_derived_ratios(filing_id, period_id, session) -> list[FinancialFact]
             .where(
                 FinancialFact.filing_id == filing_id,
                 FinancialFact.fact_name == name,
-                FinancialFact.source_method == "regex",
+                FinancialFact.source_method.in_(["xbrl", "ixbrl", "regex"]),
             )
             .order_by(FinancialFact.confidence.desc(), FinancialFact.created_at.desc())
         )

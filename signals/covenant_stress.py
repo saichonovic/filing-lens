@@ -18,9 +18,20 @@ def run_covenant_stress_signal(filing_id: str, issuer_id: str, session) -> Detec
     ceiling = _get_fact(filing_id, "covenant_ceiling", session)
     headroom_usd = _get_fact(filing_id, "covenant_headroom_usd", session)
 
-    if not actual_ratio or not ceiling or ceiling.fact_value_numeric <= 0:
-        return None
+    if actual_ratio and ceiling and ceiling.fact_value_numeric > 0:
+        return _build_leverage_signal(actual_ratio, ceiling, headroom_usd, filing_id, issuer_id, session)
 
+    min_liquidity = _get_fact(filing_id, "covenant_min_liquidity", session)
+    actual_liquidity = _get_fact(filing_id, "covenant_actual_liquidity", session)
+    cash_fact = _get_fact(filing_id, "cash_and_equivalents", session)
+    actual = actual_liquidity or cash_fact
+    if min_liquidity and actual:
+        return _build_liquidity_signal(min_liquidity, actual, filing_id, issuer_id, session)
+
+    return None
+
+
+def _build_leverage_signal(actual_ratio, ceiling, headroom_usd, filing_id: str, issuer_id: str, session) -> DetectedSignal:
     headroom_ratio = (ceiling.fact_value_numeric - actual_ratio.fact_value_numeric) / ceiling.fact_value_numeric * Decimal("100")
     if headroom_ratio <= HEADROOM_HIGH_RISK_PCT:
         severity, verdict, score = "HIGH", "HIGH_RISK", 9.0
@@ -61,6 +72,67 @@ def run_covenant_stress_signal(filing_id: str, issuer_id: str, session) -> Detec
             )
         )
 
+    session.flush()
+    return signal
+
+
+def _build_liquidity_signal(min_liquidity, actual_liquidity, filing_id: str, issuer_id: str, session) -> DetectedSignal | None:
+    min_val = float(min_liquidity.fact_value_numeric)
+    actual_val = float(actual_liquidity.fact_value_numeric)
+    if min_val <= 0:
+        return None
+
+    headroom_pct = ((actual_val - min_val) / min_val) * 100
+    headroom_usd = actual_val - min_val
+    if headroom_pct < 20:
+        severity, verdict, score = "HIGH", "HIGH_RISK", 9.0
+    elif headroom_pct < 50:
+        severity, verdict, score = "MEDIUM", "CAUTION", 6.0
+    elif headroom_pct < 100:
+        severity, verdict, score = "LOW", "WATCH", 3.0
+    else:
+        return None
+
+    now = utcnow()
+    signal = DetectedSignal(
+        issuer_id=issuer_id,
+        filing_id=filing_id,
+        signal_type="covenant_stress",
+        signal_family="liquidity_distress",
+        severity=severity,
+        score=score,
+        verdict=verdict,
+        status="active",
+        detection_method="deterministic",
+        summary=(
+            f"Minimum liquidity covenant: ${min_val:,.1f}M. "
+            f"Actual cash: ${actual_val:,.1f}M. "
+            f"Headroom: ${headroom_usd:,.1f}M ({headroom_pct:.0f}% above minimum)."
+        ),
+        investor_question=(
+            f"Cash of ${actual_val:,.1f}M is only {headroom_pct:.0f}% above the "
+            f"${min_val:,.1f}M minimum liquidity covenant. What is the current cash burn rate?"
+        ),
+        created_at=now,
+    )
+    signal = replace_signal(signal, session)
+    for row, label in [(min_liquidity, "covenant_minimum"), (actual_liquidity, "actual_liquidity")]:
+        if row is None:
+            continue
+        session.add(
+            SignalEvidence(
+                signal_id=signal.id,
+                evidence_type="numeric_fact",
+                fact_id=row.id,
+                numeric_value=row.fact_value_numeric,
+                evidence_json={
+                    "label": label,
+                    "headroom_usd": round(headroom_usd, 2),
+                    "headroom_pct": round(headroom_pct, 1),
+                },
+                created_at=now,
+            )
+        )
     session.flush()
     return signal
 

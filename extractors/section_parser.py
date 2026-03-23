@@ -29,13 +29,23 @@ SECTION_PATTERNS = {
     r"item\s*5\.02": "ITEM_5_02_EXECUTIVE_DEPARTURE",
 }
 
+FOOTNOTE_PATTERNS = {
+    r"note\s+\d+[\.:\s]+(?:debt|long[\s-]?term\s+debt|credit\s+facilit|borrowing|notes\s+payable|revolving\s+credit)": "FOOTNOTE_DEBT",
+    r"note\s+\d+[\.:\s]+(?:going\s+concern|substantial\s+doubt|liquidity\s+and\s+capital)": "FOOTNOTE_GOING_CONCERN",
+    r"note\s+\d+[\.:\s]+(?:revenue\s+recogni|disaggregat)": "FOOTNOTE_REVENUE_RECOGNITION",
+    r"note\s+\d+[\.:\s]+(?:related\s+part)": "FOOTNOTE_RELATED_PARTY",
+    r"note\s+\d+[\.:\s]+(?:income\s+tax|tax\s+provision)": "FOOTNOTE_INCOME_TAX",
+    r"note\s+\d+[\.:\s]+(?:commitment|contingenc|legal\s+proceed)": "FOOTNOTE_COMMITMENTS",
+}
+
+FOOTNOTE_CONFIDENCE = 0.85
+
 
 def _heuristic_item_code(line: str) -> str | None:
     lowered = line.lower()
     match = re.search(r"\bitem\s+(\d+)([a-z]?)(?:\.(\d{2}))?", lowered)
     if not match:
         return None
-
     major = match.group(1)
     suffix = (match.group(2) or "").upper()
     decimal = match.group(3)
@@ -47,7 +57,6 @@ def _heuristic_item_code(line: str) -> str | None:
 
 
 def parse_sections(html_path: str, filing_id: uuid.UUID, document_id: uuid.UUID) -> list[dict]:
-    """Parse HTML filing into canonical section dictionaries."""
     html = Path(html_path).read_text(encoding="utf-8", errors="replace")
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     soup = BeautifulSoup(html, "lxml")
@@ -70,11 +79,11 @@ def parse_sections(html_path: str, filing_id: uuid.UUID, document_id: uuid.UUID)
         if not current_code or not current_lines:
             current_lines = []
             return
-
         text = "\n".join(current_lines).strip()
         if len(text) > 100:
             sections.append(
                 {
+                    "id": uuid.uuid4(),
                     "filing_id": filing_id,
                     "document_id": document_id,
                     "section_code": current_code,
@@ -83,6 +92,7 @@ def parse_sections(html_path: str, filing_id: uuid.UUID, document_id: uuid.UUID)
                     "section_text": text,
                     "section_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
                     "confidence": current_confidence,
+                    "parent_section_id": None,
                 }
             )
             current_order += 1
@@ -91,14 +101,15 @@ def parse_sections(html_path: str, filing_id: uuid.UUID, document_id: uuid.UUID)
     for line in lines:
         matched_code: str | None = None
         matched_confidence = 1.0
+        lowered = line.lower()
 
         for pattern, code in SECTION_PATTERNS.items():
-            if re.search(pattern, line.lower()):
+            if re.search(pattern, lowered):
                 matched_code = code
                 matched_confidence = 0.8 if len(line) < 25 else 1.0
                 break
 
-        if matched_code is None and line.lower().startswith("item "):
+        if matched_code is None and lowered.startswith("item "):
             matched_code = _heuristic_item_code(line)
             matched_confidence = 0.6 if matched_code else 1.0
 
@@ -111,4 +122,68 @@ def parse_sections(html_path: str, filing_id: uuid.UUID, document_id: uuid.UUID)
             current_lines.append(line)
 
     flush_section()
+
+    item8_sections = [section for section in sections if section["section_code"] == "ITEM_8_FINANCIAL_STATEMENTS"]
+    for item8 in item8_sections:
+        sections.extend(
+            _extract_footnotes(
+                item8["section_text"],
+                filing_id,
+                document_id,
+                item8["id"],
+            )
+        )
+    return sections
+
+
+def _extract_footnotes(text: str, filing_id: uuid.UUID, document_id: uuid.UUID, parent_section_id: uuid.UUID) -> list[dict]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    sections: list[dict] = []
+    current_code: str | None = None
+    current_title: str | None = None
+    current_lines: list[str] = []
+    current_order = 100
+
+    def flush() -> None:
+        nonlocal current_code, current_title, current_lines, current_order
+        if not current_code or not current_lines:
+            current_lines = []
+            return
+        body = "\n".join(current_lines).strip()
+        if len(body) > 80:
+            sections.append(
+                {
+                    "id": uuid.uuid4(),
+                    "filing_id": filing_id,
+                    "document_id": document_id,
+                    "section_code": current_code,
+                    "section_title": (current_title or current_code)[:256],
+                    "section_order": current_order,
+                    "section_text": body,
+                    "section_hash": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                    "parent_section_id": parent_section_id,
+                    "confidence": FOOTNOTE_CONFIDENCE,
+                }
+            )
+            current_order += 1
+        current_lines = []
+
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        matched_code: str | None = None
+        combined = lowered
+        if re.match(r"note\s+\d+[\.:\s]*$", lowered) and index + 1 < len(lines):
+            combined = f"{lowered} {lines[index + 1].strip().lower()}"
+        for pattern, code in FOOTNOTE_PATTERNS.items():
+            if re.search(pattern, combined):
+                matched_code = code
+                break
+        if matched_code:
+            flush()
+            current_code = matched_code
+            current_title = (f"{line} {lines[index + 1].strip()}" if combined != lowered and index + 1 < len(lines) else line)
+        elif current_code:
+            current_lines.append(line)
+
+    flush()
     return sections
