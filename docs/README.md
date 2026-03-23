@@ -9,3 +9,8 @@ The canonical architecture docs currently live at the project root:
 - `FILINGLENS_SIGNAL_LIBRARY_V1.md`
 
 Keep those root documents as the implementation contract unless intentionally superseded.
+
+Optional Stage 5 LLM enrichment:
+
+- `scripts/derive.py --with-llm` expects `ANTHROPIC_API_KEY`
+- install `anthropic` into `.venv` only when enabling the narrative layer
