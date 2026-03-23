@@ -10,6 +10,7 @@ from app.config import settings
 
 
 SEC_BASE = "https://data.sec.gov"
+ARCHIVES_BASE = "https://www.sec.gov/Archives"
 TICKER_LOOKUP_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
@@ -82,8 +83,8 @@ def _parse_filing_date(value: str) -> datetime:
 
 def _primary_document_url(cik: str, accession_number: str, primary_document: str | None) -> str:
     if not primary_document:
-        return f"{SEC_BASE}/Archives/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/"
-    return f"{SEC_BASE}/Archives/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/{primary_document}"
+        return f"{ARCHIVES_BASE}/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/"
+    return f"{ARCHIVES_BASE}/edgar/data/{int(cik)}/{accession_number.replace('-', '')}/{primary_document}"
 
 
 def _guess_source_format(primary_document: str | None) -> str | None:

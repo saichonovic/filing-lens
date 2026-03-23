@@ -52,6 +52,7 @@ class FilingDocument(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     source_format: Mapped[Optional[str]] = mapped_column(String(16))
     file_path: Mapped[Optional[str]] = mapped_column(Text)
     source_url: Mapped[Optional[str]] = mapped_column(Text)
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64))
     mime_type: Mapped[Optional[str]] = mapped_column(String(64))
     page_count: Mapped[Optional[int]]
     word_count: Mapped[Optional[int]]
