@@ -1,0 +1,53 @@
+default_model: ${MODEL_NAME}
+default_lm_api_base: ${OPENAI_API_BASE}
+
+datasets:
+  input:
+    type: file
+    path: storage/docetl_runs/signal_narrative_enrichment/input.json
+
+operations:
+  - name: signal_enrichment
+    type: map
+    model: ${MODEL_NAME}
+    prompt: |
+      You are a senior equity analyst reviewing a risk signal flagged by a deterministic SEC filing analysis system.
+
+      COMPANY: {{ input.ticker }} - {{ input.form_type }} {{ input.period_label }}
+      SIGNAL: {{ input.signal_type }} ({{ input.signal_family }})
+      SEVERITY: {{ input.severity }} | SCORE: {{ input.score }} | VERDICT: {{ input.verdict }}
+
+      DETERMINISTIC FINDINGS:
+      {{ input.deterministic_summary }}
+
+      EVIDENCE:
+      {% for e in input.evidence %}
+      - {{ e.label }}: {{ e.value }}{% if e.prior is not none %} (prior: {{ e.prior }}, change: {{ e.change_pct }}%){% endif %}
+      {% endfor %}
+
+      RELEVANT FILING TEXT:
+      {{ input.section_text[:2500] }}
+
+      Write exactly three fields:
+
+      ANALYST_NOTE: [2-3 sentences that either confirm the deterministic finding with specific language from the filing, or qualify it if the filing text provides a clear benign explanation. Only reference language actually present above - do not invent.]
+
+      PLAIN_ENGLISH: [1-2 sentences explaining what this signal means for a retail investor who does not know accounting terminology.]
+
+      WATCH_NEXT: [1 sentence: the single most important metric or disclosure to check in the next quarterly or annual filing to determine whether this signal is worsening or resolving.]
+    output:
+      schema:
+        analyst_note: string
+        plain_english: string
+        watch_next: string
+
+pipeline:
+  steps:
+    - name: enrich
+      input: input
+      operations:
+        - signal_enrichment
+  output:
+    type: file
+    path: storage/docetl_runs/signal_narrative_enrichment/output.json
+    intermediate_dir: storage/docetl_runs/signal_narrative_enrichment/intermediate

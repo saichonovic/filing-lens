@@ -1,0 +1,48 @@
+default_model: ${MODEL_NAME}
+default_lm_api_base: ${OPENAI_API_BASE}
+
+datasets:
+  input:
+    type: file
+    path: storage/docetl_runs/policy_change_narrative/input.json
+
+operations:
+  - name: policy_narrative
+    type: map
+    model: ${MODEL_NAME}
+    prompt: |
+      You are analyzing a change in accounting policy language between two consecutive SEC filings.
+
+      COMPANY: {{ input.ticker }} - {{ input.form_type }} {{ input.period_label }}
+      POLICY TYPE: {{ input.policy_type }}
+      IS NEW POLICY: {{ input.is_new_vs_prior }}
+
+      CURRENT FILING POLICY TEXT:
+      {{ input.current_policy_text[:1000] }}
+
+      PRIOR FILING POLICY TEXT:
+      {{ input.prior_policy_text[:1000] }}
+
+      Write exactly three fields:
+
+      CHANGE_EXPLANATION: [1-2 sentences: what specifically changed or was added. Quote the key phrase difference. If new, say what was absent before.]
+
+      RISK_IMPLICATION: [1 sentence: does this change increase investor risk, reduce it, or is it neutral? Be direct.]
+
+      INVESTOR_QUESTION: [One precise question an analyst should ask management about this policy change on the next earnings call.]
+    output:
+      schema:
+        change_explanation: string
+        risk_implication: string
+        investor_question: string
+
+pipeline:
+  steps:
+    - name: explain
+      input: input
+      operations:
+        - policy_narrative
+  output:
+    type: file
+    path: storage/docetl_runs/policy_change_narrative/output.json
+    intermediate_dir: storage/docetl_runs/policy_change_narrative/intermediate

@@ -1,0 +1,62 @@
+default_model: ${MODEL_NAME}
+default_lm_api_base: ${OPENAI_API_BASE}
+
+datasets:
+  input:
+    type: file
+    path: storage/docetl_runs/going_concern_hedge/input.json
+
+operations:
+  - name: going_concern_narrative
+    type: map
+    model: ${MODEL_NAME}
+    prompt: |
+      You are an expert SEC filing analyst writing for retail investors.
+
+      COMPANY: {{ input.ticker }} - {{ input.form_type }} {{ input.period_label }}
+      SIGNAL SEVERITY: {{ input.signal_severity }}
+      DETERMINISTIC SUMMARY: {{ input.signal_summary }}
+
+      TIER 1 LANGUAGE (formal going-concern phrases):
+      {% for q in input.tier1_hits %}
+      - "{{ q }}"
+      {% endfor %}
+      {% if not input.tier1_hits %}
+      None detected.
+      {% endif %}
+
+      TIER 2 LANGUAGE (conditional hedge phrases):
+      {% for q in input.tier2_hits %}
+      - "{{ q }}"
+      {% endfor %}
+
+      {% if input.runway_months %}
+      ESTIMATED CASH RUNWAY: {{ input.runway_months | round(1) }} months
+      {% endif %}
+
+      RELEVANT FILING TEXT:
+      {{ input.section_texts.get('ITEM_7_MDA', input.section_texts.get('ITEM_2_MDA', ''))[:2000] }}
+
+      Write exactly three fields:
+
+      NARRATIVE: [2-3 sentences explaining what this language means for an investor. Be specific about which phrases are most significant and why. Do not invent numbers not present above.]
+
+      INVESTOR_ACTION: [One sentence: what should an investor holding this stock do or monitor right now?]
+
+      WATCH_NEXT: [One sentence: what specific language or metric in the NEXT quarterly filing would confirm deterioration vs. stabilization?]
+    output:
+      schema:
+        narrative: string
+        investor_action: string
+        watch_next: string
+
+pipeline:
+  steps:
+    - name: enrich
+      input: input
+      operations:
+        - going_concern_narrative
+  output:
+    type: file
+    path: storage/docetl_runs/going_concern_hedge/output.json
+    intermediate_dir: storage/docetl_runs/going_concern_hedge/intermediate
